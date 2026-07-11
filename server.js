@@ -81,7 +81,7 @@ app.post('/api/transcribe', async (req, res) => {
   try {
     const buf = Buffer.from(audioBase64, 'base64');
     const ext = /mp4|m4a/.test(audioMime) ? 'mp4' : /ogg/.test(audioMime) ? 'ogg' : 'webm';
-    const language = lang.split('-')[0]; // 'uk-UA' → 'uk'
+    const language = lang.split('-')[0];
     const fd = new FormData();
     fd.append('file', new Blob([buf], { type: audioMime }), `audio.${ext}`);
     fd.append('model', 'whisper-1');
@@ -156,7 +156,7 @@ app.get('/api/recordings', async (req, res) => {
 app.get('/api/calendar', async (req, res) => {
   try {
     const year = parseInt(req.query.year, 10);
-    const month = parseInt(req.query.month, 10); // 1-12
+    const month = parseInt(req.query.month, 10);
     if (!year || !month) return res.status(400).json({ error: 'year and month required' });
     const r = await pool.query(
       `SELECT to_char(created_at, 'YYYY-MM-DD') AS day, COUNT(*)::int AS count
@@ -174,4 +174,44 @@ app.get('/api/calendar', async (req, res) => {
 app.get('/api/recordings/:id/audio', async (req, res) => {
   try {
     const r = await pool.query('SELECT audio, audio_mime FROM recordings WHERE id=$1', [req.params.id]);
-    if (!r.rows.length || !r.rows[0].audio) return re
+    if (!r.rows.length || !r.rows[0].audio) return res.status(404).end();
+    res.set('Content-Type', r.rows[0].audio_mime || 'audio/webm');
+    res.send(r.rows[0].audio);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Update title/description
+app.patch('/api/recordings/:id', async (req, res) => {
+  try {
+    const { title, description } = req.body;
+    const r = await pool.query(
+      `UPDATE recordings SET title=COALESCE($1,title), description=COALESCE($2,description)
+       WHERE id=$3 RETURNING id, title, description, transcript, lang, duration_sec, audio_mime, created_at, (audio IS NOT NULL) AS has_audio`,
+      [title || null, description || null, req.params.id]);
+    if (!r.rows.length) return res.status(404).json({ error: 'not found' });
+    res.json(r.rows[0]);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Delete
+app.delete('/api/recordings/:id', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM recordings WHERE id=$1', [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/health', (req, res) => res.json({ ok: true }));
+
+initDb()
+  .then(() => app.listen(PORT, () => console.log(`Voice Notes running on port ${PORT}`)))
+  .catch((e) => {
+    console.error('DB init failed:', e);
+    process.exit(1);
+  });
