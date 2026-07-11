@@ -127,16 +127,12 @@ const isMobile = /Android|iPhone|iPad|iPod|Mobi/i.test(navigator.userAgent);
 
 let mediaRecorder = null, chunks = [], recognition = null;
 let recording = false, startTime = 0, timerInt = null, srError = null;
-// srBase — текст завершених сесій розпізнавання, srCurrent — поточна сесія.
-// Текст завжди ПЕРЕБУДОВУЄТЬСЯ з повного списку результатів (а не додається),
-// бо Android Chrome повторно надсилає накопичені результати і текст дублюється.
 let srBase = '', srCurrent = '';
 
-// On mobile the microphone can't be shared between MediaRecorder and SpeechRecognition,
-// so audio saving is off by default there — SpeechRecognition handles live transcription.
+// On mobile: audio OFF by default (mic can't be shared with SR)
 $('saveAudio').checked = !isMobile;
 if (isMobile) {
-  $('mobileHint').textContent = 'ℹ️ На телефоні: розпізнавання відбувається через браузер. Щоб зберігати аудіо — увімкніть чекбокс (але тоді розпізнавання вимкнеться).';
+  $('mobileHint').textContent = 'ℹ️ На телефоні розпізнавання відбувається через браузер. Увімкни «Зберігати аудіо» тільки якщо не потрібен live-текст.';
 }
 
 if (!SR) {
@@ -148,7 +144,6 @@ $('recBtn').addEventListener('click', () => {
     stopRecording();
   } else {
     $('recStatus').textContent = '⏳ Запит дозволу на мікрофон...';
-    $('recBtn').style.opacity = '0.7';
     startRecording();
   }
 });
@@ -159,18 +154,16 @@ async function startRecording() {
   srCurrent = '';
   srError = null;
   mediaRecorder = null;
-  $('recBtn').style.opacity = '';
-  const withAudio = $('saveAudio').checked && navigator.mediaDevices && window.MediaRecorder;
+  const withAudio = $('saveAudio').checked && !!navigator.mediaDevices && !!window.MediaRecorder;
   try {
-    // Start recognition (on mobile only when NOT saving audio — mic can't be shared)
+    // On mobile with audio saving, skip SR — mic can't be shared
     if (SR && !(isMobile && withAudio)) {
       recognition = new SR();
       recognition.lang = $('lang').value;
       recognition.continuous = true;
       recognition.interimResults = true;
       recognition.onresult = (e) => {
-        // Always rebuild from ALL results (index 0) to prevent duplication on
-        // Android Chrome, which re-sends all previous results on every event.
+        // Rebuild from ALL results each time to prevent duplication on Android Chrome
         let finalText = '';
         let interimText = '';
         for (let i = 0; i < e.results.length; i++) {
@@ -192,6 +185,8 @@ async function startRecording() {
           $('recStatus').textContent = '⚠️ Мікрофон заблоковано — дозволь доступ у налаштуваннях браузера';
         } else if (e.error === 'audio-capture') {
           $('recStatus').textContent = '⚠️ Мікрофон зайнятий іншим додатком';
+        } else if (e.error === 'network') {
+          $('recStatus').textContent = '⚠️ Помилка мережі — перевір підключення';
         }
       };
       recognition.onend = () => {
@@ -222,9 +217,9 @@ async function startRecording() {
   } catch (err) {
     recording = false;
     if (recognition) try { recognition.stop(); } catch(_){}
-    const errMsg = err.name === 'NotAllowedError' ? '⚠️ Мікрофон заблоковано — дозволь доступ у налаштуваннях браузера'
-                  : err.name === 'NotFoundError' ? '⚠️ Мікрофон не знайдено'
-                  : '⚠️ Помилка мікрофона: ' + (err.message || err.name);
+    const errMsg = err.name === 'NotAllowedError' ? '⚠️ Мікрофон заблоковано — дозволь доступ у налаштуваннях'
+                 : err.name === 'NotFoundError' ? '⚠️ Мікрофон не знайдено'
+                 : '⚠️ Помилка мікрофона: ' + (err.message || err.name);
     $('recStatus').textContent = errMsg;
   }
 }
@@ -239,12 +234,11 @@ function stopRecording() {
   $('recStatus').textContent = '⏳ Зберігаю та генерую назву й опис...';
 
   const finish = async (blob) => {
-    // Wait for final speech recognition results to arrive
     await new Promise(r => setTimeout(r, 1000));
     let transcript = (srBase + ' ' + srCurrent).trim();
     const audioBase64 = blob ? await blobToBase64(blob) : null;
 
-    // If no browser transcript (mobile with audio saving), use Whisper
+    // If audio saved but no browser transcript, try Whisper
     if (audioBase64 && !transcript) {
       $('recStatus').textContent = '🔄 Транскрибую через сервер...';
       try {
@@ -280,11 +274,7 @@ function stopRecording() {
       });
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
       $('liveTranscript').style.display = 'none';
-      if (!transcript) {
-        $('recStatus').textContent = '⚠️ Збережено, але без транскрипту.';
-      } else {
-        $('recStatus').textContent = '✅ Збережено!';
-      }
+      $('recStatus').textContent = transcript ? '✅ Збережено!' : '⚠️ Збережено без транскрипту.';
       loadList();
       loadCalendar();
     } catch (err) {
@@ -398,4 +388,31 @@ async function loadCalendar() {
   const dows = ['Пн','Вт','Ср','Чт','Пт','Сб','Нд'];
   let html = dows.map(d => `<div class="cal-dow">${d}</div>`).join('');
   const first = new Date(y, m - 1, 1);
-  const startDow = (first.
+  const startDow = (first.getDay() + 6) % 7;
+  const daysInMonth = new Date(y, m, 0).getDate();
+  const todayStr = new Date().toISOString().slice(0, 10);
+
+  for (let i = 0; i < startDow; i++) html += `<div class="cal-day other"></div>`;
+  for (let d = 1; d <= daysInMonth; d++) {
+    const dayStr = `${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    const c = counts[dayStr] || 0;
+    html += `<div class="cal-day ${c ? 'has' : ''} ${dayStr === todayStr ? 'today' : ''}" ${c ? `onclick="filterDay('${dayStr}')"` : ''}>
+      <span class="num">${d}</span>${c ? `<span class="badge">${c}</span>` : ''}
+    </div>`;
+  }
+  grid.innerHTML = html;
+}
+
+function filterDay(day) {
+  $('from').value = day;
+  $('to').value = day;
+  $('q').value = '';
+  document.querySelector('.tab[data-view=list]').click();
+  loadList();
+}
+
+loadList();
+loadCalendar();
+</script>
+</body>
+</html>
