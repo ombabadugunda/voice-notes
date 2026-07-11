@@ -126,7 +126,11 @@ const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 const isMobile = /Android|iPhone|iPad|iPod|Mobi/i.test(navigator.userAgent);
 
 let mediaRecorder = null, chunks = [], recognition = null;
-let finalTranscript = '', recording = false, startTime = 0, timerInt = null, srError = null;
+let recording = false, startTime = 0, timerInt = null, srError = null;
+// srBase — текст завершених сесій розпізнавання, srCurrent — поточна сесія.
+// Текст завжди ПЕРЕБУДОВУЄТЬСЯ з повного списку результатів (а не додається),
+// бо Android Chrome повторно надсилає накопичені результати і текст дублюється.
+let srBase = '', srCurrent = '';
 
 // On mobile the microphone can't be shared between MediaRecorder and
 // SpeechRecognition, so audio saving is off by default there.
@@ -143,7 +147,8 @@ $('recBtn').addEventListener('click', () => recording ? stopRecording() : startR
 
 async function startRecording() {
   chunks = [];
-  finalTranscript = '';
+  srBase = '';
+  srCurrent = '';
   srError = null;
   mediaRecorder = null;
   const withAudio = $('saveAudio').checked && navigator.mediaDevices && window.MediaRecorder;
@@ -155,17 +160,17 @@ async function startRecording() {
       recognition.continuous = true;
       recognition.interimResults = true;
       recognition.onresult = (e) => {
-        let interim = '';
-        for (let i = e.resultIndex; i < e.results.length; i++) {
-          if (e.results[i].isFinal) finalTranscript += e.results[i][0].transcript + ' ';
-          else interim += e.results[i][0].transcript;
-        }
+        let text = '';
+        for (let i = 0; i < e.results.length; i++) text += e.results[i][0].transcript;
+        srCurrent = text;
         const lt = $('liveTranscript');
         lt.style.display = 'block';
-        lt.textContent = finalTranscript + interim;
+        lt.textContent = (srBase + ' ' + srCurrent).trim();
       };
       recognition.onerror = (e) => { srError = e.error; console.warn('SR error:', e.error); };
       recognition.onend = () => {
+        srBase = (srBase + ' ' + srCurrent).trim();
+        srCurrent = '';
         const fatal = ['audio-capture', 'not-allowed', 'service-not-allowed'].includes(srError);
         if (recording && !fatal) { try { recognition.start(); } catch(_){} }
       };
@@ -205,9 +210,9 @@ function stopRecording() {
   $('recStatus').textContent = '⏳ Зберігаю та генерую назву й опис...';
 
   const finish = async (blob) => {
-    // give recognition a moment to deliver final results
-    await new Promise(r => setTimeout(r, 900));
-    const transcript = finalTranscript.trim();
+    // розпізнаний текст фіналізується в кінці запису
+    await new Promise(r => setTimeout(r, 1000));
+    const transcript = (srBase + ' ' + srCurrent).trim();
     const audioBase64 = blob ? await blobToBase64(blob) : null;
     try {
       const resp = await fetch('/api/recordings', {
