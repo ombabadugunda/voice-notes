@@ -128,6 +128,7 @@ const isMobile = /Android|iPhone|iPad|iPod|Mobi/i.test(navigator.userAgent);
 let mediaRecorder = null, chunks = [], recognition = null;
 let recording = false, startTime = 0, timerInt = null, srError = null;
 let srBase = '', srCurrent = '';
+  let finalizedIdx = new Set(); // tracks which SR result indices have been committed
 
 // On mobile: audio OFF by default (mic can't be shared with SR)
 $('saveAudio').checked = !isMobile;
@@ -152,6 +153,7 @@ async function startRecording() {
   chunks = [];
   srBase = '';
   srCurrent = '';
+  finalizedIdx = new Set();
   srError = null;
   mediaRecorder = null;
   const withAudio = $('saveAudio').checked && !!navigator.mediaDevices && !!window.MediaRecorder;
@@ -163,23 +165,26 @@ async function startRecording() {
       recognition.continuous = true;
       recognition.interimResults = true;
       recognition.onresult = (e) => {
-        let rawFinals = '';
+        // Android Chrome sends resultIndex=0 on every event, resending ALL previous
+        // finals each time. We use a Set to track which indices were already
+        // committed — each result is processed exactly once, preventing duplication.
+        let newFinals = '';
         let interimText = '';
         for (let i = 0; i < e.results.length; i++) {
           if (e.results[i].isFinal) {
-            rawFinals += e.results[i][0].transcript + ' ';
+            if (!finalizedIdx.has(i)) {
+              newFinals += e.results[i][0].transcript + ' ';
+              finalizedIdx.add(i);
+            }
           } else {
             interimText += e.results[i][0].transcript;
           }
         }
-        // Android Chrome bug: after recognition restart it re-sends ALL previous
-        // finals in the new session. Strip the already-committed srBase prefix.
-        const base = srBase.trim();
-        const raw = rawFinals.trim();
-        srCurrent = (base && raw.startsWith(base)) ? raw.slice(base.length).trimStart() : raw;
+        srBase += newFinals;
+        srCurrent = interimText;
         const lt = $('liveTranscript');
         lt.style.display = 'block';
-        lt.textContent = [srBase, srCurrent, interimText].filter(s => s.trim()).join(' ').trim();
+        lt.textContent = (srBase + ' ' + srCurrent).trim();
       };
       recognition.onerror = (e) => {
         srError = e.error;
@@ -193,7 +198,7 @@ async function startRecording() {
         }
       };
       recognition.onend = () => {
-        srBase = (srBase + ' ' + srCurrent).trim();
+        finalizedIdx = new Set(); // result indices reset on new session
         srCurrent = '';
         const fatal = ['audio-capture', 'not-allowed', 'service-not-allowed'].includes(srError);
         if (recording && !fatal) { try { recognition.start(); } catch(_){} }
