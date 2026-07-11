@@ -23,7 +23,11 @@
   .rec-status { margin-top: 12px; color: var(--muted); min-height: 22px; }
   .timer { font-variant-numeric: tabular-nums; font-size: 1.2rem; color: var(--text); }
   .live-transcript { margin-top: 14px; background: var(--card2); border-radius: 10px; padding: 12px; text-align: left; min-height: 48px; color: var(--text); font-size: .95rem; display: none; }
-  select { background: var(--card2); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; margin-bottom: 16px; font-size: .9rem; }
+  select { background: var(--card2); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; font-size: .9rem; }
+  .rec-options { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; align-items: center; margin-bottom: 16px; }
+  .save-audio { color: var(--muted); font-size: .85rem; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+  .save-audio input { accent-color: var(--accent2); width: 16px; height: 16px; }
+  .mobile-hint { color: var(--muted); font-size: .78rem; margin-bottom: 12px; max-width: 480px; margin-left: auto; margin-right: auto; }
 
   .tabs { display: flex; gap: 8px; margin-bottom: 16px; }
   .tab { flex: 1; padding: 10px; background: var(--card); border: 1px solid var(--border); border-radius: 10px; cursor: pointer; text-align: center; color: var(--muted); }
@@ -70,17 +74,21 @@
   <p class="subtitle">Запис → розпізнавання → автоматична назва й опис → пошук і календар</p>
 
   <div class="recorder">
-    <div>
-      <label for="lang" style="color:var(--muted);font-size:.85rem;margin-right:8px">Мова розпізнавання:</label>
-      <select id="lang">
-        <option value="uk-UA" selected>Українська</option>
-        <option value="en-US">English</option>
-        <option value="pl-PL">Polski</option>
-        <option value="de-DE">Deutsch</option>
-        <option value="fr-FR">Français</option>
-        <option value="es-ES">Español</option>
-      </select>
+    <div class="rec-options">
+      <span>
+        <label for="lang" style="color:var(--muted);font-size:.85rem;margin-right:8px">Мова:</label>
+        <select id="lang">
+          <option value="uk-UA" selected>Українська</option>
+          <option value="en-US">English</option>
+          <option value="pl-PL">Polski</option>
+          <option value="de-DE">Deutsch</option>
+          <option value="fr-FR">Français</option>
+          <option value="es-ES">Español</option>
+        </select>
+      </span>
+      <label class="save-audio"><input type="checkbox" id="saveAudio"> Зберігати аудіо</label>
     </div>
+    <div class="mobile-hint" id="mobileHint"></div>
     <button id="recBtn" class="rec-btn" title="Почати запис">🎤</button>
     <div class="rec-status" id="recStatus">Натисніть, щоб почати запис</div>
     <div class="live-transcript" id="liveTranscript"></div>
@@ -115,9 +123,17 @@
 <script>
 const $ = (id) => document.getElementById(id);
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+const isMobile = /Android|iPhone|iPad|iPod|Mobi/i.test(navigator.userAgent);
 
 let mediaRecorder = null, chunks = [], recognition = null;
-let finalTranscript = '', recording = false, startTime = 0, timerInt = null;
+let finalTranscript = '', recording = false, startTime = 0, timerInt = null, srError = null;
+
+// On mobile the microphone can't be shared between MediaRecorder and
+// SpeechRecognition, so audio saving is off by default there.
+$('saveAudio').checked = !isMobile;
+if (isMobile) {
+  $('mobileHint').textContent = 'ℹ️ На телефоні розпізнавання працює лише з вимкненим «Зберігати аудіо» — мікрофон не може одночасно писати аудіо і розпізнавати мову.';
+}
 
 if (!SR) {
   $('recStatus').textContent = '⚠️ Розпізнавання мовлення не підтримується цим браузером. Використовуйте Chrome.';
@@ -126,14 +142,13 @@ if (!SR) {
 $('recBtn').addEventListener('click', () => recording ? stopRecording() : startRecording());
 
 async function startRecording() {
+  chunks = [];
+  finalTranscript = '';
+  srError = null;
+  mediaRecorder = null;
+  const withAudio = $('saveAudio').checked && navigator.mediaDevices && window.MediaRecorder;
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    chunks = [];
-    finalTranscript = '';
-    mediaRecorder = new MediaRecorder(stream);
-    mediaRecorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
-    mediaRecorder.start();
-
+    // Start recognition FIRST so it grabs the mic before MediaRecorder.
     if (SR) {
       recognition = new SR();
       recognition.lang = $('lang').value;
@@ -149,9 +164,20 @@ async function startRecording() {
         lt.style.display = 'block';
         lt.textContent = finalTranscript + interim;
       };
-      recognition.onerror = (e) => console.warn('SR error:', e.error);
-      recognition.onend = () => { if (recording) try { recognition.start(); } catch(_){} };
+      recognition.onerror = (e) => { srError = e.error; console.warn('SR error:', e.error); };
+      recognition.onend = () => {
+        const fatal = ['audio-capture', 'not-allowed', 'service-not-allowed'].includes(srError);
+        if (recording && !fatal) { try { recognition.start(); } catch(_){} }
+      };
       recognition.start();
+    }
+
+    if (withAudio) {
+      await new Promise(r => setTimeout(r, 400));
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaRecorder = new MediaRecorder(stream);
+      mediaRecorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+      mediaRecorder.start(1000);
     }
 
     recording = true;
@@ -163,6 +189,8 @@ async function startRecording() {
       $('recStatus').innerHTML = '<span class="timer">' + String(Math.floor(s/60)).padStart(2,'0') + ':' + String(s%60).padStart(2,'0') + '</span> — йде запис...';
     }, 250);
   } catch (err) {
+    recording = false;
+    if (recognition) try { recognition.stop(); } catch(_){}
     $('recStatus').textContent = '⚠️ Немає доступу до мікрофона: ' + err.message;
   }
 }
@@ -172,40 +200,52 @@ function stopRecording() {
   clearInterval(timerInt);
   if (recognition) try { recognition.stop(); } catch(_){}
   const durationSec = (Date.now() - startTime) / 1000;
+  $('recBtn').classList.remove('recording');
+  $('recBtn').textContent = '🎤';
+  $('recStatus').textContent = '⏳ Зберігаю та генерую назву й опис...';
 
-  mediaRecorder.onstop = async () => {
-    mediaRecorder.stream.getTracks().forEach(t => t.stop());
-    const blob = new Blob(chunks, { type: mediaRecorder.mimeType || 'audio/webm' });
-    $('recBtn').classList.remove('recording');
-    $('recBtn').textContent = '🎤';
-    $('recStatus').textContent = '⏳ Зберігаю та генерую назву й опис...';
-
-    // wait a moment for final SR results
-    await new Promise(r => setTimeout(r, 700));
-
-    const audioBase64 = await blobToBase64(blob);
+  const finish = async (blob) => {
+    // give recognition a moment to deliver final results
+    await new Promise(r => setTimeout(r, 900));
+    const transcript = finalTranscript.trim();
+    const audioBase64 = blob ? await blobToBase64(blob) : null;
     try {
       const resp = await fetch('/api/recordings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          transcript: finalTranscript.trim(),
+          transcript,
           lang: $('lang').value,
           audioBase64,
-          audioMime: blob.type,
+          audioMime: blob ? (blob.type || 'audio/webm') : 'audio/webm',
           durationSec: Math.round(durationSec * 10) / 10,
         }),
       });
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
-      $('recStatus').textContent = '✅ Збережено!';
       $('liveTranscript').style.display = 'none';
+      if (!transcript && SR && blob) {
+        $('recStatus').textContent = '⚠️ Збережено, але без транскрипту: розпізнавання не спрацювало. Вимкніть «Зберігати аудіо» і спробуйте ще раз.';
+      } else if (!transcript && !SR) {
+        $('recStatus').textContent = '⚠️ Збережено без транскрипту (браузер не підтримує розпізнавання).';
+      } else {
+        $('recStatus').textContent = '✅ Збережено!';
+      }
       loadList();
       loadCalendar();
     } catch (err) {
       $('recStatus').textContent = '⚠️ Помилка збереження: ' + err.message;
     }
   };
-  mediaRecorder.stop();
+
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    mediaRecorder.onstop = () => {
+      mediaRecorder.stream.getTracks().forEach(t => t.stop());
+      finish(new Blob(chunks, { type: mediaRecorder.mimeType || 'audio/webm' }));
+    };
+    mediaRecorder.stop();
+  } else {
+    finish(null);
+  }
 }
 
 function blobToBase64(blob) {
@@ -226,6 +266,8 @@ document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () =>
 }));
 
 // ---------- List / search ----------
+const recMap = {};
+
 async function loadList() {
   const params = new URLSearchParams();
   if ($('q').value.trim()) params.set('q', $('q').value.trim());
@@ -236,6 +278,7 @@ async function loadList() {
   const list = $('list');
   if (!rows.length) { list.innerHTML = '<div class="empty">Записів не знайдено</div>'; return; }
   list.innerHTML = rows.map(r => {
+    recMap[r.id] = r;
     const d = new Date(r.created_at);
     const dur = r.duration_sec ? ' · ' + Math.round(r.duration_sec) + ' сек' : '';
     return `<div class="card">
@@ -244,9 +287,27 @@ async function loadList() {
       <div class="desc">${esc(r.description)}</div>
       ${r.has_audio ? `<audio controls preload="none" src="/api/recordings/${r.id}/audio"></audio>` : ''}
       ${r.transcript ? `<details><summary>Повний транскрипт</summary><div class="transcript">${esc(r.transcript)}</div></details>` : ''}
-      <div class="card-actions"><button class="del-btn" onclick="delRec(${r.id})">🗑 Видалити</button></div>
+      <div class="card-actions">
+        <button class="del-btn" onclick="editRec(${r.id})">✏️ Редагувати</button>
+        <button class="del-btn" onclick="delRec(${r.id})">🗑 Видалити</button>
+      </div>
     </div>`;
   }).join('');
+}
+
+async function editRec(id) {
+  const r = recMap[id];
+  if (!r) return;
+  const title = prompt('Назва запису:', r.title);
+  if (title === null) return;
+  const description = prompt('Короткий опис:', r.description || '');
+  if (description === null) return;
+  await fetch('/api/recordings/' + id, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: title.trim() || r.title, description: description.trim() }),
+  });
+  loadList();
 }
 
 async function delRec(id) {
