@@ -132,12 +132,11 @@ let recording = false, startTime = 0, timerInt = null, srError = null;
 // бо Android Chrome повторно надсилає накопичені результати і текст дублюється.
 let srBase = '', srCurrent = '';
 
-// On mobile, save audio by default and transcribe via server after recording.
-// The microphone can't be shared between MediaRecorder and SpeechRecognition,
-// so live recognition is skipped on mobile — Whisper handles it at the end.
-$('saveAudio').checked = true;
+// On mobile the microphone can't be shared between MediaRecorder and SpeechRecognition,
+// so audio saving is off by default there — SpeechRecognition handles live transcription.
+$('saveAudio').checked = !isMobile;
 if (isMobile) {
-  $('mobileHint').textContent = 'ℹ️ На телефоні: аудіо зберігається й автоматично розшифровується на сервері після запису.';
+  $('mobileHint').textContent = 'ℹ️ На телефоні: розпізнавання відбувається через браузер. Щоб зберігати аудіо — увімкніть чекбокс (але тоді розпізнавання вимкнеться).';
 }
 
 if (!SR) {
@@ -154,8 +153,7 @@ async function startRecording() {
   mediaRecorder = null;
   const withAudio = $('saveAudio').checked && navigator.mediaDevices && window.MediaRecorder;
   try {
-    // On mobile with audio saving, skip live recognition — mic can't be shared.
-    // Whisper will transcribe the audio at the end instead.
+    // Start recognition (on mobile only when NOT saving audio — mic can't be shared)
     if (SR && !(isMobile && withAudio)) {
       recognition = new SR();
       recognition.lang = $('lang').value;
