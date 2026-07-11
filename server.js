@@ -72,6 +72,38 @@ async function generateMeta(transcript, lang) {
   }
 }
 
+// Transcribe audio via OpenAI Whisper
+app.post('/api/transcribe', async (req, res) => {
+  const { audioBase64, audioMime = 'audio/webm', lang = 'uk-UA' } = req.body;
+  if (!audioBase64) return res.status(400).json({ error: 'audioBase64 required' });
+  if (!process.env.OPENAI_API_KEY)
+    return res.status(503).json({ error: 'OPENAI_API_KEY not configured' });
+  try {
+    const buf = Buffer.from(audioBase64, 'base64');
+    const ext = /mp4|m4a/.test(audioMime) ? 'mp4' : /ogg/.test(audioMime) ? 'ogg' : 'webm';
+    const language = lang.split('-')[0]; // 'uk-UA' → 'uk'
+    const fd = new FormData();
+    fd.append('file', new Blob([buf], { type: audioMime }), `audio.${ext}`);
+    fd.append('model', 'whisper-1');
+    fd.append('language', language);
+    const r = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
+      body: fd,
+    });
+    if (!r.ok) {
+      const t = await r.text();
+      console.error('[whisper] API error:', t);
+      return res.status(502).json({ error: t.slice(0, 300) });
+    }
+    const data = await r.json();
+    res.json({ transcript: (data.text || '').trim() });
+  } catch (e) {
+    console.error('[whisper]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Create recording
 app.post('/api/recordings', async (req, res) => {
   try {
@@ -142,44 +174,4 @@ app.get('/api/calendar', async (req, res) => {
 app.get('/api/recordings/:id/audio', async (req, res) => {
   try {
     const r = await pool.query('SELECT audio, audio_mime FROM recordings WHERE id=$1', [req.params.id]);
-    if (!r.rows.length || !r.rows[0].audio) return res.status(404).end();
-    res.set('Content-Type', r.rows[0].audio_mime || 'audio/webm');
-    res.send(r.rows[0].audio);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// Update title/description
-app.patch('/api/recordings/:id', async (req, res) => {
-  try {
-    const { title, description } = req.body;
-    const r = await pool.query(
-      `UPDATE recordings SET title=COALESCE($1,title), description=COALESCE($2,description)
-       WHERE id=$3 RETURNING id, title, description, transcript, lang, duration_sec, audio_mime, created_at, (audio IS NOT NULL) AS has_audio`,
-      [title || null, description || null, req.params.id]);
-    if (!r.rows.length) return res.status(404).json({ error: 'not found' });
-    res.json(r.rows[0]);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-// Delete
-app.delete('/api/recordings/:id', async (req, res) => {
-  try {
-    await pool.query('DELETE FROM recordings WHERE id=$1', [req.params.id]);
-    res.json({ ok: true });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-app.get('/health', (req, res) => res.json({ ok: true }));
-
-initDb()
-  .then(() => app.listen(PORT, () => console.log(`Voice Notes running on port ${PORT}`)))
-  .catch((e) => {
-    console.error('DB init failed:', e);
-    process.exit(1);
-  });
+    if (!r.rows.length || !r.rows[0].audio) return re
