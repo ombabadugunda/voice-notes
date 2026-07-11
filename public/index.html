@@ -143,7 +143,15 @@ if (!SR) {
   $('recStatus').textContent = '⚠️ Розпізнавання мовлення не підтримується цим браузером. Використовуйте Chrome.';
 }
 
-$('recBtn').addEventListener('click', () => recording ? stopRecording() : startRecording());
+$('recBtn').addEventListener('click', () => {
+  if (recording) {
+    stopRecording();
+  } else {
+    $('recStatus').textContent = '⏳ Запит дозволу на мікрофон...';
+    $('recBtn').style.opacity = '0.7';
+    startRecording();
+  }
+});
 
 async function startRecording() {
   chunks = [];
@@ -151,6 +159,7 @@ async function startRecording() {
   srCurrent = '';
   srError = null;
   mediaRecorder = null;
+  $('recBtn').style.opacity = '';
   const withAudio = $('saveAudio').checked && navigator.mediaDevices && window.MediaRecorder;
   try {
     // Start recognition (on mobile only when NOT saving audio — mic can't be shared)
@@ -176,7 +185,15 @@ async function startRecording() {
         lt.style.display = 'block';
         lt.textContent = [srBase, srCurrent, interimText].filter(s => s.trim()).join(' ').trim();
       };
-      recognition.onerror = (e) => { srError = e.error; console.warn('SR error:', e.error); };
+      recognition.onerror = (e) => {
+        srError = e.error;
+        console.warn('SR error:', e.error);
+        if (e.error === 'not-allowed') {
+          $('recStatus').textContent = '⚠️ Мікрофон заблоковано — дозволь доступ у налаштуваннях браузера';
+        } else if (e.error === 'audio-capture') {
+          $('recStatus').textContent = '⚠️ Мікрофон зайнятий іншим додатком';
+        }
+      };
       recognition.onend = () => {
         srBase = (srBase + ' ' + srCurrent).trim();
         srCurrent = '';
@@ -205,7 +222,10 @@ async function startRecording() {
   } catch (err) {
     recording = false;
     if (recognition) try { recognition.stop(); } catch(_){}
-    $('recStatus').textContent = '⚠️ Немає доступу до мікрофона: ' + err.message;
+    const errMsg = err.name === 'NotAllowedError' ? '⚠️ Мікрофон заблоковано — дозволь доступ у налаштуваннях браузера'
+                  : err.name === 'NotFoundError' ? '⚠️ Мікрофон не знайдено'
+                  : '⚠️ Помилка мікрофона: ' + (err.message || err.name);
+    $('recStatus').textContent = errMsg;
   }
 }
 
