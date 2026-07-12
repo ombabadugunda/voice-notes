@@ -6,7 +6,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json({ limit: '30mb' }));
-app.use(express.static(path.join(__dirname, 'public'), { etag: false, lastModified: false, setHeaders: (res) => { res.set('Cache-Control', 'no-store'); } }));
+app.use(express.static(path.join(__dirname, 'public')));
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -81,7 +81,7 @@ app.post('/api/transcribe', async (req, res) => {
   try {
     const buf = Buffer.from(audioBase64, 'base64');
     const ext = /mp4|m4a/.test(audioMime) ? 'mp4' : /ogg/.test(audioMime) ? 'ogg' : 'webm';
-    const language = lang.split('-')[0];
+    const language = lang.split('-')[0]; // 'uk-UA' → 'uk'
     const fd = new FormData();
     fd.append('file', new Blob([buf], { type: audioMime }), `audio.${ext}`);
     fd.append('model', 'whisper-1');
@@ -156,7 +156,7 @@ app.get('/api/recordings', async (req, res) => {
 app.get('/api/calendar', async (req, res) => {
   try {
     const year = parseInt(req.query.year, 10);
-    const month = parseInt(req.query.month, 10);
+    const month = parseInt(req.query.month, 10); // 1-12
     if (!year || !month) return res.status(400).json({ error: 'year and month required' });
     const r = await pool.query(
       `SELECT to_char(created_at, 'YYYY-MM-DD') AS day, COUNT(*)::int AS count
