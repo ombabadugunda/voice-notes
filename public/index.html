@@ -86,9 +86,9 @@
           <option value="es-ES">Español</option>
         </select>
       </span>
-      <label class="save-audio"><input type="checkbox" id="saveAudio"> Зберігати аудіо</label>
+      <label class="save-audio"><input type="checkbox" id="saveAudio" checked> Зберігати аудіо</label>
     </div>
-    <div class="mobile-hint" id="mobileHint"></div>
+    <div class="mobile-hint">Розпізнавання виконується на сервері після завершення запису — однаково надійно на телефоні й комп'ютері.</div>
     <button id="recBtn" class="rec-btn" title="Почати запис">🎤</button>
     <div class="rec-status" id="recStatus">Натисніть, щоб почати запис</div>
     <div class="live-transcript" id="liveTranscript"></div>
@@ -122,97 +122,20 @@
 
 <script>
 const $ = (id) => document.getElementById(id);
-const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-const isMobile = /Android|iPhone|iPad|iPod|Mobi/i.test(navigator.userAgent);
 
-let mediaRecorder = null, chunks = [], recognition = null;
-let recording = false, startTime = 0, timerInt = null, srError = null;
-let srBase = '', srCurrent = '';
-  let finalizedIdx = new Set(); // tracks which SR result indices have been committed
+let mediaRecorder = null, chunks = [];
+let recording = false, startTime = 0, timerInt = null;
 
-// On mobile: audio OFF by default (mic can't be shared with SR)
-$('saveAudio').checked = !isMobile;
-if (isMobile) {
-  $('mobileHint').textContent = 'ℹ️ На телефоні розпізнавання відбувається через браузер. Увімкни «Зберігати аудіо» тільки якщо не потрібен live-текст.';
-}
-
-if (!SR) {
-  $('recStatus').textContent = '⚠️ Розпізнавання мовлення не підтримується цим браузером. Використовуйте Chrome.';
-}
-
-$('recBtn').addEventListener('click', () => {
-  if (recording) {
-    stopRecording();
-  } else {
-    $('recStatus').textContent = '⏳ Запит дозволу на мікрофон...';
-    startRecording();
-  }
-});
+$('recBtn').addEventListener('click', () => recording ? stopRecording() : startRecording());
 
 async function startRecording() {
   chunks = [];
-  srBase = '';
-  srCurrent = '';
-  finalizedIdx = new Set();
-  srError = null;
-  mediaRecorder = null;
-  const withAudio = $('saveAudio').checked && !!navigator.mediaDevices && !!window.MediaRecorder;
+  $('liveTranscript').style.display = 'none';
   try {
-    // On mobile with audio saving, skip SR — mic can't be shared
-    if (SR && !(isMobile && withAudio)) {
-      recognition = new SR();
-      recognition.lang = $('lang').value;
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      recognition.onresult = (e) => {
-        // Android Chrome sends resultIndex=0 on every event, resending ALL previous
-        // finals each time. We use a Set to track which indices were already
-        // committed — each result is processed exactly once, preventing duplication.
-        let newFinals = '';
-        let interimText = '';
-        for (let i = 0; i < e.results.length; i++) {
-          if (e.results[i].isFinal) {
-            if (!finalizedIdx.has(i)) {
-              newFinals += e.results[i][0].transcript + ' ';
-              finalizedIdx.add(i);
-            }
-          } else {
-            interimText += e.results[i][0].transcript;
-          }
-        }
-        srBase += newFinals;
-        srCurrent = interimText;
-        const lt = $('liveTranscript');
-        lt.style.display = 'block';
-        lt.textContent = (srBase + ' ' + srCurrent).trim();
-      };
-      recognition.onerror = (e) => {
-        srError = e.error;
-        console.warn('SR error:', e.error);
-        if (e.error === 'not-allowed') {
-          $('recStatus').textContent = '⚠️ Мікрофон заблоковано — дозволь доступ у налаштуваннях браузера';
-        } else if (e.error === 'audio-capture') {
-          $('recStatus').textContent = '⚠️ Мікрофон зайнятий іншим додатком';
-        } else if (e.error === 'network') {
-          $('recStatus').textContent = '⚠️ Помилка мережі — перевір підключення';
-        }
-      };
-      recognition.onend = () => {
-        finalizedIdx = new Set(); // result indices reset on new session
-        srCurrent = '';
-        const fatal = ['audio-capture', 'not-allowed', 'service-not-allowed'].includes(srError);
-        if (recording && !fatal) { try { recognition.start(); } catch(_){} }
-      };
-      recognition.start();
-    }
-
-    if (withAudio) {
-      await new Promise(r => setTimeout(r, 400));
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      mediaRecorder = new MediaRecorder(stream);
-      mediaRecorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
-      mediaRecorder.start(1000);
-    }
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    mediaRecorder = new MediaRecorder(stream);
+    mediaRecorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+    mediaRecorder.start(1000);
 
     recording = true;
     startTime = Date.now();
@@ -224,50 +147,51 @@ async function startRecording() {
     }, 250);
   } catch (err) {
     recording = false;
-    if (recognition) try { recognition.stop(); } catch(_){}
-    const errMsg = err.name === 'NotAllowedError' ? '⚠️ Мікрофон заблоковано — дозволь доступ у налаштуваннях'
-                 : err.name === 'NotFoundError' ? '⚠️ Мікрофон не знайдено'
-                 : '⚠️ Помилка мікрофона: ' + (err.message || err.name);
-    $('recStatus').textContent = errMsg;
+    $('recStatus').textContent = '⚠️ Немає доступу до мікрофона: ' + err.message;
   }
 }
 
 function stopRecording() {
   recording = false;
   clearInterval(timerInt);
-  if (recognition) try { recognition.stop(); } catch(_){}
   const durationSec = (Date.now() - startTime) / 1000;
   $('recBtn').classList.remove('recording');
   $('recBtn').textContent = '🎤';
-  $('recStatus').textContent = '⏳ Зберігаю та генерую назву й опис...';
 
-  const finish = async (blob) => {
-    await new Promise(r => setTimeout(r, 1000));
-    let transcript = (srBase + ' ' + srCurrent).trim();
-    const audioBase64 = blob ? await blobToBase64(blob) : null;
+  mediaRecorder.onstop = async () => {
+    mediaRecorder.stream.getTracks().forEach(t => t.stop());
+    const blob = new Blob(chunks, { type: mediaRecorder.mimeType || 'audio/webm' });
+    const audioBase64 = await blobToBase64(blob);
+    const audioMime = blob.type || 'audio/webm';
 
-    // If audio saved but no browser transcript, try Whisper
-    if (audioBase64 && !transcript) {
-      $('recStatus').textContent = '🔄 Транскрибую через сервер...';
-      try {
-        const tr = await fetch('/api/transcribe', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            audioBase64,
-            audioMime: blob.type || 'audio/webm',
-            lang: $('lang').value,
-          }),
-        });
-        if (tr.ok) {
-          const td = await tr.json();
-          if (td.transcript) transcript = td.transcript;
-        }
-      } catch (e) {
-        console.warn('Server transcription failed:', e);
+    // 1) Розпізнавання на сервері (Whisper) — один раз, у кінці запису
+    $('recStatus').textContent = '🎧 Розпізнаю мовлення...';
+    let transcript = '';
+    try {
+      const tr = await fetch('/api/transcribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ audioBase64, audioMime, lang: $('lang').value }),
+      });
+      if (tr.ok) {
+        transcript = (await tr.json()).transcript || '';
+      } else if (tr.status === 503) {
+        console.warn('Transcription not configured (no OPENAI_API_KEY)');
+      } else {
+        console.warn('Transcription failed:', tr.status);
       }
+    } catch (e) {
+      console.warn('Transcription error:', e.message);
     }
 
+    if (transcript) {
+      const lt = $('liveTranscript');
+      lt.style.display = 'block';
+      lt.textContent = transcript;
+    }
+
+    // 2) Збереження запису
+    $('recStatus').textContent = '⏳ Зберігаю та генерую назву й опис...';
     try {
       const resp = await fetch('/api/recordings', {
         method: 'POST',
@@ -275,30 +199,20 @@ function stopRecording() {
         body: JSON.stringify({
           transcript,
           lang: $('lang').value,
-          audioBase64,
-          audioMime: blob ? (blob.type || 'audio/webm') : 'audio/webm',
+          audioBase64: $('saveAudio').checked ? audioBase64 : null,
+          audioMime,
           durationSec: Math.round(durationSec * 10) / 10,
         }),
       });
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
-      $('liveTranscript').style.display = 'none';
-      $('recStatus').textContent = transcript ? '✅ Збережено!' : '⚠️ Збережено без транскрипту.';
+      $('recStatus').textContent = transcript ? '✅ Збережено!' : '⚠️ Збережено без транскрипту (розпізнавання не спрацювало).';
       loadList();
       loadCalendar();
     } catch (err) {
       $('recStatus').textContent = '⚠️ Помилка збереження: ' + err.message;
     }
   };
-
-  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-    mediaRecorder.onstop = () => {
-      mediaRecorder.stream.getTracks().forEach(t => t.stop());
-      finish(new Blob(chunks, { type: mediaRecorder.mimeType || 'audio/webm' }));
-    };
-    mediaRecorder.stop();
-  } else {
-    finish(null);
-  }
+  mediaRecorder.stop();
 }
 
 function blobToBase64(blob) {
@@ -396,7 +310,7 @@ async function loadCalendar() {
   const dows = ['Пн','Вт','Ср','Чт','Пт','Сб','Нд'];
   let html = dows.map(d => `<div class="cal-dow">${d}</div>`).join('');
   const first = new Date(y, m - 1, 1);
-  const startDow = (first.getDay() + 6) % 7;
+  const startDow = (first.getDay() + 6) % 7; // Monday first
   const daysInMonth = new Date(y, m, 0).getDate();
   const todayStr = new Date().toISOString().slice(0, 10);
 
